@@ -4,7 +4,6 @@ from generator.utils import map_visual_type
 
 
 class VisualBuilder:
-    """Parses raw visual configurations, filters, aggregations, bindings, properties, and sorting."""
 
     @classmethod
     def parse_field(cls, field_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -23,13 +22,17 @@ class VisualBuilder:
         parsed = {}
         for role_name, binding_value in raw_bindings.items():
             if isinstance(binding_value, list):
-                parsed[role_name] = [cls.parse_field(item) for item in binding_value]
+                parsed[role_name] = [
+                    cls.parse_field(item) for item in binding_value
+                ]
             elif isinstance(binding_value, dict):
                 parsed[role_name] = cls.parse_field(binding_value)
         return parsed
 
     @classmethod
-    def parse_sort_by(cls, raw_sort: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def parse_sort_by(
+        cls, raw_sort: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
         if not raw_sort or "target" not in raw_sort:
             return None
         return {
@@ -38,21 +41,27 @@ class VisualBuilder:
         }
 
     @classmethod
-    def parse_filters(cls, raw_filters: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    def parse_filters(
+        cls, raw_filters: Optional[List[Dict[str, Any]]]
+    ) -> List[Dict[str, Any]]:
         if not raw_filters:
             return []
         parsed = []
         for f in raw_filters:
-            parsed.append({
-                "table": f.get("table", ""),
-                "column": f.get("column", ""),
-                "operator": f.get("operator", "In"),
-                "values": f.get("values", []),
-            })
+            parsed.append(
+                {
+                    "table": f.get("table", ""),
+                    "column": f.get("column", ""),
+                    "operator": f.get("operator", "In"),
+                    "values": f.get("values", []),
+                }
+            )
         return parsed
 
     @classmethod
-    def parse_properties(cls, raw_props: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    def parse_properties(
+        cls, raw_props: Optional[List[Dict[str, Any]]]
+    ) -> List[Dict[str, Any]]:
         if not raw_props:
             return []
         return [
@@ -89,6 +98,8 @@ class VisualBuilder:
             visual_node["filters"] = cls.parse_filters(raw_visual["filters"])
 
         if "properties" in raw_visual and raw_visual["properties"]:
-            visual_node["properties"] = cls.parse_properties(raw_visual["properties"])
+            visual_node["properties"] = cls.parse_properties(
+                raw_visual["properties"]
+            )
 
         return visual_node
