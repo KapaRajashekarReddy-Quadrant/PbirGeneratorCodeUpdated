@@ -2,7 +2,6 @@
 import os
 from typing import Any, Dict, List
 
-# Layout constraints configurable via environment variables
 DEFAULT_PAGE_WIDTH = int(os.getenv("DEFAULT_PAGE_WIDTH", "646"))
 DEFAULT_PAGE_HEIGHT = int(os.getenv("DEFAULT_PAGE_HEIGHT", "560"))
 DEFAULT_MARGIN = int(os.getenv("DEFAULT_MARGIN", "18"))
