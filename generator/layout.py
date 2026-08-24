@@ -1,36 +1,52 @@
-# generator/layout.py
-import os
-from typing import Any, Dict, List
-
-DEFAULT_PAGE_WIDTH = int(os.getenv("DEFAULT_PAGE_WIDTH", "646"))
-DEFAULT_PAGE_HEIGHT = int(os.getenv("DEFAULT_PAGE_HEIGHT", "560"))
-DEFAULT_MARGIN = int(os.getenv("DEFAULT_MARGIN", "18"))
-DEFAULT_GAP = int(os.getenv("DEFAULT_GAP", "16"))
+from typing import Dict, List, Any
 
 
-class LayoutEngine:
+class LayoutGenerator:
+    def __init__(self, metadata: Dict[str, Any]):
+        self.metadata = metadata.get("metadata", metadata)
+        self.dashboards = self.metadata.get("dashboards", [])
 
-    @staticmethod
-    def adjust_layout(
-        visuals: List[Dict[str, Any]],
-        canvas_width: int = DEFAULT_PAGE_WIDTH,
-        canvas_height: int = DEFAULT_PAGE_HEIGHT,
-        margin: int = DEFAULT_MARGIN,
-        default_gap: int = DEFAULT_GAP,
-    ) -> List[Dict[str, Any]]:
-        running_y = 99
-        content_width = canvas_width - (margin * 2)
+    def get_dashboard_layouts(self) -> List[Dict[str, Any]]:
+        """Extracts canvas configuration and de-duplicated visual layouts using pixel_layout."""
+        dashboard_configs = []
 
-        for index, visual in enumerate(visuals, start=1):
-            layout = visual.get("layout", {})
-            if "x" not in layout or "y" not in layout:
-                layout["x"] = margin
-                layout["y"] = running_y
-                layout["width"] = content_width
-                layout["height"] = 200
-                running_y += 200 + default_gap
+        for dash in self.dashboards:
+            canvas = dash.get("canvas", {})
+            visuals = []
+            seen_positions = set()
 
-            layout["z"] = layout.get("z", index)
-            visual["layout"] = layout
+            for v in dash.get("visuals", []):
+                name = v.get("name")
+                px = v.get("pixel_layout", {})
 
-        return visuals
+                # Extract pixel coordinates
+                x = px.get("pixel_x", 0)
+                y = px.get("pixel_y", 0)
+                width = px.get("pixel_width", 300)
+                height = px.get("pixel_height", 200)
+
+                # Skip duplicate visual placements
+                pos_key = (name, x, y, width, height)
+                if pos_key in seen_positions:
+                    continue
+                seen_positions.add(pos_key)
+
+                visuals.append({
+                    "name": name,
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height
+                })
+
+            dashboard_configs.append({
+                "dashboardName": dash.get("dashboardName", "Main Dashboard"),
+                "canvas": {
+                    "width": canvas.get("width", 1000),
+                    "height": canvas.get("height", 800)
+                },
+                "coordinateSystem": dash.get("coordinateSystem", "tableau_0_100000"),
+                "visuals": visuals
+            })
+
+        return dashboard_configs
