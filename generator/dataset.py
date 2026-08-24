@@ -3,48 +3,57 @@ from typing import Dict, List, Any
 
 class DatasetGenerator:
     def __init__(self, metadata: Dict[str, Any]):
-        # Safeguard if raw payload was passed without unwrapping
-        self.metadata = metadata.get("metadata", metadata)
+        self.metadata = metadata.get("metadata", metadata) if isinstance(metadata, dict) else {}
         self.tables = self.metadata.get("tables", {})
         self.relationships = self.metadata.get("relationships", [])
         self.calculations = self.metadata.get("calculations", [])
 
-    def get_table_schema(self) -> Dict[str, List[Dict[str, str]]]:
-        """Extracts tables and their columns."""
+    def get_table_schema(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Dynamically builds schemas for all tables found in the JSON."""
         schema = {}
-        for table_name, columns in self.tables.items():
-            schema[table_name] = [
-                {
-                    "name": col.get("name"),
-                    "dataType": col.get("dataType")
-                }
-                for col in columns
-            ]
+        if isinstance(self.tables, dict):
+            for table_name, columns in self.tables.items():
+                if isinstance(columns, list):
+                    schema[table_name] = [
+                        {
+                            "name": col.get("name", ""),
+                            "dataType": col.get("dataType", "string")
+                        }
+                        for col in columns if isinstance(col, dict)
+                    ]
+        elif isinstance(self.tables, list):
+            # Fallback if tables are formatted as a list of objects
+            for tbl in self.tables:
+                if isinstance(tbl, dict):
+                    t_name = tbl.get("name", "UnknownTable")
+                    schema[t_name] = tbl.get("columns", [])
         return schema
 
-    def get_relationships(self) -> List[Dict[str, str]]:
-        """Maps relationships between Fact and Dimension tables."""
+    def get_relationships(self) -> List[Dict[str, Any]]:
+        """Extracts dynamic relationships and foreign keys."""
         relationships = []
         for rel in self.relationships:
-            relationships.append({
-                "fromTable": rel.get("fromTable"),
-                "fromColumn": rel.get("fromColumn"),
-                "toTable": rel.get("toTable"),
-                "toColumn": rel.get("toColumn"),
-                "relationshipType": rel.get("relationshipType", "Many-to-One")
-            })
+            if isinstance(rel, dict):
+                relationships.append({
+                    "fromTable": rel.get("fromTable") or rel.get("from_table"),
+                    "fromColumn": rel.get("fromColumn") or rel.get("from_column"),
+                    "toTable": rel.get("toTable") or rel.get("to_table"),
+                    "toColumn": rel.get("toColumn") or rel.get("to_column"),
+                    "relationshipType": rel.get("relationshipType") or rel.get("relationship_type", "Many-to-One")
+                })
         return relationships
 
     def get_measures(self) -> List[Dict[str, Any]]:
-        """Extracts calculation measures and formulas."""
+        """Extracts calculations and measures regardless of key casing."""
         measures = []
         for calc in self.calculations:
-            measures.append({
-                "calculationId": calc.get("calculationId"),
-                "name": calc.get("name"),
-                "formula": calc.get("formula"),
-                "dataType": calc.get("dataType"),
-                "role": calc.get("role", "measure"),
-                "defaultFormat": calc.get("defaultFormat")
-            })
+            if isinstance(calc, dict):
+                measures.append({
+                    "calculationId": calc.get("calculationId") or calc.get("id"),
+                    "name": calc.get("name", "Unnamed_Measure"),
+                    "formula": calc.get("formula", ""),
+                    "dataType": calc.get("dataType", "real"),
+                    "role": calc.get("role", "measure"),
+                    "defaultFormat": calc.get("defaultFormat") or calc.get("format")
+                })
         return measures
