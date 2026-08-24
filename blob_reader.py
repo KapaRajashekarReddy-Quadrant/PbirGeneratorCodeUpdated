@@ -2,22 +2,37 @@
 import json
 import os
 from typing import Any, Dict
-
-# Configurable storage paths via environment variables
-BLOB_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
-INPUT_STORAGE_CONTAINER = os.getenv("INPUT_STORAGE_CONTAINER", "powerbi-inputs")
-OUTPUT_STORAGE_CONTAINER = os.getenv("OUTPUT_STORAGE_CONTAINER", "powerbi-outputs")
-LOCAL_OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
+from azure.storage.blob import BlobServiceClient
 
 
-def read_json_payload(file_path: str) -> Dict[str, Any]:
-    """Reads JSON payload from local filesystem (or blob if configured)."""
-    with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def get_blob_service_client() -> BlobServiceClient:
+    connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+    if not connection_string:
+        raise ValueError(
+            "AZURE_STORAGE_CONNECTION_STRING is not configured in environment variables."
+        )
+    return BlobServiceClient.from_connection_string(connection_string)
 
 
-def write_json_payload(file_path: str, data: Dict[str, Any]) -> None:
-    """Writes output payload to target directory."""
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+def read_blob_json(container_name: str, blob_path: str) -> Dict[str, Any]:
+    """Downloads and parses a JSON blob from Azure Blob Storage."""
+    client = get_blob_service_client()
+    blob_client = client.get_blob_client(
+        container=container_name, blob=blob_path
+    )
+    stream = blob_client.download_blob()
+    content = stream.readall().decode("utf-8")
+    return json.loads(content)
+
+
+def write_blob_json(
+    container_name: str, blob_path: str, data: Dict[str, Any]
+) -> str:
+    """Uploads a generated JSON payload to Azure Blob Storage."""
+    client = get_blob_service_client()
+    blob_client = client.get_blob_client(
+        container=container_name, blob=blob_path
+    )
+    json_bytes = json.dumps(data, indent=2).encode("utf-8")
+    blob_client.upload_blob(json_bytes, overwrite=True)
+    return blob_client.url
