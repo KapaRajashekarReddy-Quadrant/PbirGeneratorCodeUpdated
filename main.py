@@ -1,17 +1,28 @@
+import io
 import os
 from typing import Any, Dict, Optional, Union
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel
 import uvicorn
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import pandas as pd
-import io
 
 from backend import process_metadata_dynamic
 from auth.token import get_powerbi_access_token
 
 app = FastAPI(
     title="PowerBI PBIR Generator API",
+    version="1.0.0",
     description="Dynamic converter from metadata JSON and Excel mappings to PowerBI PBIR artifacts"
+)
+
+# Enable CORS for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -24,25 +35,37 @@ class MetadataRequest(BaseModel):
 @app.get("/")
 @app.get("/health")
 def health_check():
-    """Liveness probe for Azure App Service container startup."""
-    return {"status": "HEALTHY", "service": "PBIR Generator"}
+    """
+    Liveness and readiness probe for Azure App Service container startup.
+    Responding 200 here clears the 503 Service Unavailable state.
+    """
+    return {
+        "status": "HEALTHY",
+        "service": "PBIR Generator API",
+        "port": int(os.environ.get("PORT", os.environ.get("WEBSITES_PORT", 8000)))
+    }
 
 
 @app.post("/auth/token")
 def fetch_token():
-    """Generates MSAL Power BI bearer token."""
-    token = get_powerbi_access_token()
-    if not token:
-        raise HTTPException(
-            status_code=400,
-            detail="Could not acquire token. Please verify AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, and AZURE_TENANT_ID in App Settings."
-        )
-    return {"access_token": token, "token_type": "Bearer"}
+    """Generates an MSAL Power BI bearer token."""
+    try:
+        token = get_powerbi_access_token()
+        if not token:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not acquire token. Please verify AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, and AZURE_TENANT_ID environment variables."
+            )
+        return {"access_token": token, "token_type": "Bearer"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Authentication error: {str(e)}")
 
 
 @app.post("/process")
 def process_endpoint(request: Union[MetadataRequest, Dict[str, Any]]):
-    """Dynamically parses metadata from Azure Blob URL, relative path, or direct dictionary."""
+    """
+    Dynamically parses metadata from an Azure Blob URL, relative path, or direct JSON dictionary.
+    """
     try:
         input_data = None
         if isinstance(request, MetadataRequest):
@@ -72,7 +95,9 @@ async def upload_excel_mapping(
     file: UploadFile = File(...),
     blob_url: Optional[str] = Form(None)
 ):
-    """Processes an uploaded Excel (.xlsx/.xls) mapping file alongside dynamic metadata."""
+    """
+    Processes an uploaded Excel (.xlsx/.xls) mapping file alongside dynamic metadata.
+    """
     try:
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents))
@@ -92,8 +117,7 @@ async def upload_excel_mapping(
         raise HTTPException(status_code=500, detail=f"Failed to parse Excel file: {str(e)}")
 
 
-
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    # Azure injects PORT or WEBSITES_PORT into the environment
+    port = int(os.environ.get("PORT", os.environ.get("WEBSITES_PORT", 8000)))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
