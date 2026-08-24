@@ -1,13 +1,13 @@
 from typing import Any, Dict, Union
 from blob_reader import read_blob_json_by_path
-from generator.layout import LayoutGenerator
+from generator.report import ReportGenerator
 
 
 def process_metadata_dynamic(file_input: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Ingests any dynamic blob URL, relative path, or JSON dict and returns
-    the runtime visual configuration: {"visuals": [...], "pages": [...], "dashboards": [...]}
+    Ingests dynamic metadata from Azure Blob path, URL, or dict
+    and returns the exact runtime visuals, pages, and dashboards schema.
     """
     metadata = read_blob_json_by_path(file_input)
-    layout_gen = LayoutGenerator(metadata)
-    return layout_gen.generate_runtime_structure()
+    report_gen = ReportGenerator(metadata)
+    return report_gen.generate_runtime_json()
