@@ -1,7 +1,6 @@
 # generator/utils.py
 from typing import Optional
 
-# Standard visual mapping dictionary (Tableau / Generic / Human names -> Power BI visual types)
 VISUAL_TYPE_MAPPINGS = {
     "standard bar": "clusteredBarChart",
     "horizontal bar": "clusteredBarChart",
