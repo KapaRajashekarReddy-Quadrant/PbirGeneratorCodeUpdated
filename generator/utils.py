@@ -2,7 +2,7 @@
 from typing import Optional
 
 VISUAL_TYPE_MAPPINGS = {
-    "standard bar": "clusteredBarChart",
+    "bar": "clusteredBarChart",
     "horizontal bar": "clusteredBarChart",
     "stacked bar": "barChart",
     "100% stacked bar": "hundredPercentStackedBarChart",
