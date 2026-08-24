@@ -1,3 +1,7 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
+
 name: Build and deploy Python app to Azure Web App
 
 on:
@@ -9,6 +13,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +36,7 @@ jobs:
         with:
           name: python-app
           path: |
-            . 
+            .
             !.git
             !venv
 
@@ -53,4 +59,4 @@ jobs:
         with:
           app-name: 'pbirupdatedcode'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_8BBEA3A7969842F88FDECF00DCA574B4 }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_EDB3DA1C91C2423EA06CA0D8B86ECE08 }}
