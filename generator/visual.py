@@ -21,24 +21,54 @@ class VisualGenerator:
                     if calc_name:
                         self.calc_lookup[calc_name] = c
 
+    def _extract_title_text(self, title_obj: Any, default_name: str) -> str:
+        """
+        Dynamically extracts a pure string title from title dict, string, or fallback.
+        Ensures title is never returned as a JSON object.
+        """
+        if isinstance(title_obj, dict):
+            # Prioritize clean display text over raw text
+            title = (
+                title_obj.get("displayText")
+                or title_obj.get("text")
+                or title_obj.get("source")
+                or default_name
+            )
+        elif isinstance(title_obj, str):
+            title = title_obj
+        else:
+            title = default_name
+
+        # Clean dynamic Tableau markup like '<Sheet Name>'
+        title_str = str(title).strip()
+        if title_str.lower() in ["<sheet name>", "sheet name", ""]:
+            return str(default_name).strip()
+        return title_str
+
     def _infer_table_for_column(self, col_name: str) -> str:
         """Dynamically finds which table contains the column."""
         if not col_name:
-            return "Fact_Production"
-        clean = re.sub(r"[\[\]]", "", col_name).strip()
+            if isinstance(self.tables_meta, dict) and self.tables_meta:
+                return next(iter(self.tables_meta.keys()))
+            return "Table"
+
+        clean = re.sub(r"[\[\]]", "", str(col_name)).strip()
         if isinstance(self.tables_meta, dict):
             for tbl, cols in self.tables_meta.items():
                 if isinstance(cols, list):
                     for c in cols:
                         if isinstance(c, dict) and c.get("name") == clean:
                             return tbl
-        return "Fact_Production"
+
+        if isinstance(self.tables_meta, dict) and self.tables_meta:
+            return next(iter(self.tables_meta.keys()))
+        return "Table"
 
     def _map_visual_type(self, raw_type: str) -> str:
-        """Maps any visual type to Power BI visual strings."""
+        """Maps any visual type to Power BI visual string."""
         if not raw_type:
             return "tableEx"
-        t = raw_type.lower()
+        t = str(raw_type).lower()
         if "line" in t:
             return "lineChart"
         elif "pie" in t:
@@ -54,7 +84,7 @@ class VisualGenerator:
         dims = list(ws.get("dimensions", []))
         meas = list(ws.get("measures", []))
 
-        # Fallback to fields array if dimensions/measures are not separated
+        # Fallback to fields array if dimensions/measures are not pre-partitioned
         if not dims and not meas:
             fields = ws.get("fields", []) or ws.get("columns", [])
             for f in fields:
@@ -69,7 +99,7 @@ class VisualGenerator:
         return dims, meas
 
     def build_visual(self, sheet_name: str, layout: Dict[str, Any]) -> Dict[str, Any]:
-        """Constructs a visual object matching your target schema."""
+        """Constructs a runtime visual object with pure string title."""
         ws = {}
         if isinstance(self.worksheets, dict):
             ws = self.worksheets.get(sheet_name, {})
@@ -80,7 +110,9 @@ class VisualGenerator:
                     break
 
         v_type = self._map_visual_type(ws.get("visualType", ""))
-        title = ws.get("title") or sheet_name
+        
+        # Pure string extraction for title
+        title_str = self._extract_title_text(ws.get("title"), sheet_name)
 
         dims, meas = self._extract_fields(ws)
 
@@ -159,7 +191,7 @@ class VisualGenerator:
 
         return {
             "visualType": v_type,
-            "title": title,
+            "title": title_str,
             "layout": {
                 "x": layout.get("x", 18),
                 "y": layout.get("y", 99),
