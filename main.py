@@ -2,7 +2,7 @@ import io
 import os
 from typing import Any, Dict, Optional, Union
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
@@ -36,7 +36,7 @@ class MetadataRequest(BaseModel):
 @app.get("/health")
 def health_check():
     """
-    Liveness and readiness probe for Azure App Service container startup.
+    Liveness and readiness probe for Azure App Service.
     Responding 200 here clears the 503 Service Unavailable state.
     """
     return {
@@ -91,15 +91,17 @@ def process_endpoint(request: Union[MetadataRequest, Dict[str, Any]]):
 
 
 @app.post("/upload-mapping")
-async def upload_excel_mapping(
-    file: UploadFile = File(...),
-    blob_url: Optional[str] = Form(None)
-):
+async def upload_excel_mapping(request: Request, blob_url: Optional[str] = None):
     """
-    Processes an uploaded Excel (.xlsx/.xls) mapping file alongside dynamic metadata.
+    Upload and parse Excel binary bytes directly from the request stream.
+    Zero dependency on python-multipart.
     """
     try:
-        contents = await file.read()
+        # Read raw binary stream directly from request body
+        contents = await request.body()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Empty request body. Send raw Excel file binary in the body.")
+
         df = pd.read_excel(io.BytesIO(contents))
         mapping_records = df.to_dict(orient="records")
 
@@ -114,10 +116,9 @@ async def upload_excel_mapping(
 
         return {"status": "SUCCESS", "data": response_data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse Excel file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse Excel stream: {str(e)}")
 
 
 if __name__ == "__main__":
-    # Azure injects PORT or WEBSITES_PORT into the environment
     port = int(os.environ.get("PORT", os.environ.get("WEBSITES_PORT", 8000)))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
