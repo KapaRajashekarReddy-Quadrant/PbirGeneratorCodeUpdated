@@ -6,7 +6,6 @@ from generator.visual import VisualBuilder
 
 
 class ReportGenerator:
-    """Builds the complete multi-page/dashboard Power BI output JSON schema."""
 
     def __init__(self, raw_data: Dict[str, Any]):
         self.raw_data = raw_data
@@ -16,15 +15,15 @@ class ReportGenerator:
         raw_pages = self.raw_data.get("pages", [])
         raw_dashboards = self.raw_data.get("dashboards", [])
 
-        # 1. Parse all top-level visuals
+        # 1. Process top-level visuals
         processed_visuals = [VisualBuilder.build(v) for v in raw_visuals]
 
-        # 2. Extract page metadata
+        # 2. Extract page meta
         page_meta = raw_pages[0] if raw_pages else {}
         page_name = page_meta.get("name", "Production Overview")
         page_size = page_meta.get("size", {"width": 646, "height": 560})
 
-        # 3. Apply layout engine
+        # 3. Apply layout calculations
         arranged_visuals = LayoutEngine.adjust_layout(
             processed_visuals,
             canvas_width=page_size.get("width", 646),
@@ -35,39 +34,51 @@ class ReportGenerator:
         pages = []
         if raw_pages:
             for p in raw_pages:
-                p_visuals = [VisualBuilder.build(v) for v in p.get("visuals", [])]
+                p_visuals = [
+                    VisualBuilder.build(v) for v in p.get("visuals", [])
+                ]
+                p_width = p.get("size", {}).get("width", page_size["width"])
+                p_height = p.get("size", {}).get("height", page_size["height"])
                 p_arranged = LayoutEngine.adjust_layout(
-                    p_visuals,
-                    canvas_width=p.get("size", {}).get("width", 646),
-                    canvas_height=p.get("size", {}).get("height", 560),
+                    p_visuals, canvas_width=p_width, canvas_height=p_height
                 )
-                pages.append({
-                    "name": p.get("name", page_name),
-                    "size": p.get("size", page_size),
-                    "visuals": p_arranged,
-                })
+                pages.append(
+                    {
+                        "name": p.get("name", page_name),
+                        "size": p.get("size", page_size),
+                        "visuals": p_arranged,
+                    }
+                )
         else:
-            pages.append({
-                "name": page_name,
-                "size": page_size,
-                "visuals": copy.deepcopy(arranged_visuals),
-            })
+            pages.append(
+                {
+                    "name": page_name,
+                    "size": page_size,
+                    "visuals": copy.deepcopy(arranged_visuals),
+                }
+            )
 
         # 5. Construct dashboards array
         dashboards = []
         if raw_dashboards:
             for d in raw_dashboards:
-                dashboards.append({
-                    "name": d.get("name", page_name),
-                    "width": d.get("width", 644),
-                    "height": d.get("height", page_size.get("height", 560)),
-                })
+                dashboards.append(
+                    {
+                        "name": d.get("name", page_name),
+                        "width": d.get("width", 644),
+                        "height": d.get(
+                            "height", page_size.get("height", 560)
+                        ),
+                    }
+                )
         else:
-            dashboards.append({
-                "name": page_name,
-                "width": 644,
-                "height": page_size.get("height", 560),
-            })
+            dashboards.append(
+                {
+                    "name": page_name,
+                    "width": 644,
+                    "height": page_size.get("height", 560),
+                }
+            )
 
         return {
             "visuals": arranged_visuals,
