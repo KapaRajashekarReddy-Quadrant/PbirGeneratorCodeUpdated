@@ -1,22 +1,20 @@
-import io
 import os
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import pandas as pd
 
 from backend import process_metadata_dynamic
 from auth.token import get_powerbi_access_token
 
 app = FastAPI(
-    title="PowerBI PBIR Generator API",
-    version="1.0.0",
-    description="Dynamic converter from metadata JSON and Excel mappings to PowerBI PBIR artifacts"
+    title="FastAPI",
+    version="0.1.0",
+    description="Tableau to Power BI Runtime Visuals & Embed Token Generator"
 )
 
-# Enable CORS for frontend integration
+# Enable CORS for frontend consumption
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,97 +24,63 @@ app.add_middleware(
 )
 
 
-class MetadataRequest(BaseModel):
-    blob_url: Optional[str] = None
-    blob_path: Optional[str] = None
-    payload: Optional[Dict[str, Any]] = None
+class RuntimeVisualsRequest(BaseModel):
+    metadataBlobPath: str
+
+
+class EmbedTokenRequest(BaseModel):
+    workspace_id: Optional[str] = None
+    report_id: Optional[str] = None
+    dataset_id: Optional[str] = None
 
 
 @app.get("/")
 @app.get("/health")
 def health_check():
-    """
-    Liveness and readiness probe for Azure App Service.
-    Responding 200 here clears the 503 Service Unavailable state.
-    """
-    return {
-        "status": "HEALTHY",
-        "service": "PBIR Generator API",
-        "port": int(os.environ.get("PORT", os.environ.get("WEBSITES_PORT", 8000)))
-    }
+    """Liveness probe for Azure App Service container startup."""
+    return {"status": "HEALTHY", "service": "Runtime Visuals API"}
 
 
-@app.post("/auth/token")
-def fetch_token():
-    """Generates an MSAL Power BI bearer token."""
+@app.post("/embed-token", summary="Generate Embed Token")
+def generate_embed_token(request: Optional[EmbedTokenRequest] = None):
+    """
+    Acquires an Azure MSAL access token for embedding Power BI artifacts.
+    """
     try:
         token = get_powerbi_access_token()
         if not token:
             raise HTTPException(
                 status_code=400,
-                detail="Could not acquire token. Please verify AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, and AZURE_TENANT_ID environment variables."
+                detail="Failed to generate embed token. Verify Azure Service Principal credentials in App Settings."
             )
-        return {"access_token": token, "token_type": "Bearer"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Authentication error: {str(e)}")
-
-
-@app.post("/process")
-def process_endpoint(request: Union[MetadataRequest, Dict[str, Any]]):
-    """
-    Dynamically parses metadata from an Azure Blob URL, relative path, or direct JSON dictionary.
-    """
-    try:
-        input_data = None
-        if isinstance(request, MetadataRequest):
-            input_data = request.blob_url or request.blob_path or request.payload
-        elif isinstance(request, dict):
-            input_data = (
-                request.get("blob_url")
-                or request.get("blob_path")
-                or request.get("payload")
-                or request
-            )
-
-        if not input_data:
-            raise HTTPException(
-                status_code=400,
-                detail="Request body must provide 'blob_url', 'blob_path', or a valid JSON payload."
-            )
-
-        result = process_metadata_dynamic(input_data)
-        return {"status": "SUCCESS", "data": result}
+        return {
+            "token": token,
+            "token_type": "Bearer"
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/upload-mapping")
-async def upload_excel_mapping(request: Request, blob_url: Optional[str] = None):
+@app.post("/runtime-visuals", summary="Generate Runtime Visuals")
+def generate_runtime_visuals(request: RuntimeVisualsRequest):
     """
-    Upload and parse Excel binary bytes directly from the request stream.
-    Zero dependency on python-multipart.
+    Accepts the metadataBlobPath JSON parameter, fetches the metadata,
+    and returns parsed Power BI runtime visuals and layouts.
     """
+    if not request.metadataBlobPath or not request.metadataBlobPath.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Field 'metadataBlobPath' cannot be empty."
+        )
+
     try:
-        # Read raw binary stream directly from request body
-        contents = await request.body()
-        if not contents:
-            raise HTTPException(status_code=400, detail="Empty request body. Send raw Excel file binary in the body.")
-
-        df = pd.read_excel(io.BytesIO(contents))
-        mapping_records = df.to_dict(orient="records")
-
-        response_data = {
-            "mapping_rows_count": len(mapping_records),
-            "mappings": mapping_records
-        }
-
-        if blob_url:
-            metadata_result = process_metadata_dynamic(blob_url)
-            response_data["metadata"] = metadata_result
-
-        return {"status": "SUCCESS", "data": response_data}
+        result = process_metadata_dynamic(request.metadataBlobPath)
+        return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse Excel stream: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating runtime visuals: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
