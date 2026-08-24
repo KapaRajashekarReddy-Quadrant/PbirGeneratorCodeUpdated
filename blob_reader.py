@@ -1,4 +1,3 @@
-# blob_reader.py
 import json
 import os
 from typing import Any, Dict
@@ -17,7 +16,6 @@ def get_blob_service_client() -> BlobServiceClient:
 
 def extract_container_and_blob(raw_path: str):
     """Accurately extracts container_name and blob_name regardless of whether raw_path
-
     is a full URL (https://...), a URI with SAS tokens, or a relative path ('container/path/file.json').
     """
     clean_path = raw_path.strip()
@@ -52,7 +50,10 @@ def extract_container_and_blob(raw_path: str):
 
 
 def read_blob_json_by_path(full_or_relative_path: str) -> Dict[str, Any]:
-    """Downloads and parses JSON from Azure Blob Storage cleanly."""
+    """Downloads and parses JSON from Azure Blob Storage cleanly,
+
+    automatically unwrapping the root 'metadata' key if present.
+    """
     container_name, blob_name = extract_container_and_blob(
         full_or_relative_path
     )
@@ -69,4 +70,9 @@ def read_blob_json_by_path(full_or_relative_path: str) -> Dict[str, Any]:
 
     download_stream = blob_client.download_blob()
     content = download_stream.readall().decode("utf-8")
-    return json.loads(content)
+    data = json.loads(content)
+
+    # Automatically unwrap wrapper dictionary if stored under 'metadata'
+    if isinstance(data, dict) and "metadata" in data and isinstance(data["metadata"], dict):
+        return data["metadata"]
+    return data
