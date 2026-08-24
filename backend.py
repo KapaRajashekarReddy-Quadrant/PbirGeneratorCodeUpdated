@@ -1,22 +1,21 @@
 # backend.py
-import json
-import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+from auth.token import get_auth_headers
+from blob_reader import read_blob_json_by_path
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from generator.report import ReportGenerator
-from blob_reader import read_blob_json, write_blob_json
+from pydantic import BaseModel
 
 app = FastAPI(
-    title="Power BI Report Generator API",
-    description="Transforms visual types, bindings, properties, filters, and layouts into PBIR JSON format.",
+    title="Power BI PBIR API",
+    description="Generates embed tokens and runtime visual PBIR configurations from blob metadata.",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
-# Enable CORS for frontend and cross-origin clients
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,85 +25,57 @@ app.add_middleware(
 )
 
 
-class BlobProcessRequest(BaseModel):
-    container_name: str
-    input_blob_path: str
-    output_blob_path: Optional[str] = "output/runtime_visuals.json"
+class RuntimeVisualsRequest(BaseModel):
+    metadataBlobPath: str
 
 
-@app.get("/", tags=["Health"])
-def health_check():
-    """Health check endpoint to verify App Service status."""
-    return {
-        "status": "online",
-        "service": "Power BI Generator API",
-        "swagger_docs": "/docs",
-    }
+class EmbedTokenRequest(BaseModel):
+    workspaceId: str = ""
+    reportId: str = ""
+    datasetId: str = ""
 
 
-@app.post("/runtime-visuals", tags=["Report Generation"])
-@app.post("/generate", tags=["Report Generation"])
-def generate_runtime_visuals(payload: Dict[str, Any]):
-    """Accepts visual specifications and returns the exact Power BI JSON schema."""
+# -------------------------------------------------------------
+# 1. POST /embed-token
+# -------------------------------------------------------------
+@app.post("/embed-token", summary="Generate Embed Token")
+def generate_embed_token(request: EmbedTokenRequest = None):
+    """Generates Azure AD / Power BI Embed Token using MSAL credentials."""
     try:
-        generator = ReportGenerator(payload)
-        result = generator.generate()
-
-        # Cache locally to output directory
-        output_dir = os.getenv("OUTPUT_DIR", "output")
-        os.makedirs(output_dir, exist_ok=True)
-        local_output_path = os.path.join(output_dir, "runtime_visuals.json")
-        with open(local_output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2)
-
-        return result
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Report generation error: {str(e)}",
-        )
-
-
-@app.get("/runtime-visuals", tags=["Report Generation"])
-def get_latest_runtime_visuals():
-    """Retrieves the last generated runtime_visuals.json."""
-    output_dir = os.getenv("OUTPUT_DIR", "output")
-    local_output_path = os.path.join(output_dir, "runtime_visuals.json")
-    if not os.path.exists(local_output_path):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No runtime_visuals.json found. Execute a POST request first.",
-        )
-    with open(local_output_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-@app.post("/process-blob", tags=["Blob Storage"])
-def process_blob_report(request: BlobProcessRequest):
-    """Downloads JSON from an Azure Blob, transforms it, and uploads the result back to Blob Storage."""
-    try:
-        raw_payload = read_blob_json(
-            container_name=request.container_name,
-            blob_path=request.input_blob_path,
-        )
-
-        generator = ReportGenerator(raw_payload)
-        result = generator.generate()
-
-        output_url = write_blob_json(
-            container_name=request.container_name,
-            blob_path=request.output_blob_path,
-            data=result,
-        )
-
+        headers = get_auth_headers()
         return {
+            "token": headers.get("Authorization", "").replace("Bearer ", ""),
             "status": "success",
-            "message": "Report generated and saved to blob successfully.",
-            "output_blob_url": output_url,
-            "data": result,
         }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Blob processing failed: {str(e)}",
+            detail=f"Failed to generate embed token: {str(e)}",
+        )
+
+
+# -------------------------------------------------------------
+# 2. POST /runtime-visuals (Reads from Blob & Returns JSON)
+# -------------------------------------------------------------
+@app.post("/runtime-visuals", summary="Generate Runtime Visuals")
+def generate_runtime_visuals(request: RuntimeVisualsRequest):
+    """Reads metadata JSON from the provided Blob Storage path,
+
+    maps visual types, layout coordinates, filters, aggregations,
+    and returns the compiled PBIR JSON schema.
+    """
+    try:
+        # 1. Read input JSON directly from the Blob storage path
+        raw_metadata = read_blob_json_by_path(request.metadataBlobPath)
+
+        # 2. Run transformations (visuals mapping, aggregations, layout, filters)
+        generator = ReportGenerator(raw_metadata)
+        result = generator.generate()
+
+        # 3. Return exact JSON format directly as HTTP response
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process runtime visuals from blob: {str(e)}",
         )
