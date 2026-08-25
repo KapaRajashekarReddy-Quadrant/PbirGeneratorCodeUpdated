@@ -650,31 +650,87 @@
  
 #     # 3. Nothing matched anywhere in the list -> safe default.
 #     return "tableEx"
- import re
-from typing import Optional
+import re
+from typing import Optional, Dict, Any
+
+# ============================================================
+# POWER BI VISUAL SCHEMA MAPPINGS
+# ============================================================
+# Maps exact strings output by extract_visual_metadata()
+# (both visualSubtype and visualType) directly to Power BI visualType IDs.
 
 VISUAL_TYPE_MAPPINGS = {
     # -------------------------------------------------------------
-    # Tableau Unspaced / Metadata Raw Tokens & Typo Handlers
+    # 1. Exact Subtypes from resolve_chart_subtype()
+    # -------------------------------------------------------------
+    # Bars & Columns
+    "100% stacked bar chart": "hundredPercentStackedBarChart",
+    "stacked bar chart": "barChart",
+    "clustered / side-by-side bar chart": "clusteredBarChart",
+    "horizontal bar chart": "clusteredBarChart",
+    "vertical bar chart": "clusteredColumnChart",
+    
+    # Combos & Multi-Axis
+    "combo chart (line + bar)": "lineClusteredColumnComboChart",
+    "dual axis line chart": "lineChart",
+    "multi-line chart": "lineChart",
+    "trend line / time series line": "lineChart",
+    
+    # Areas
+    "100% stacked area chart": "stackedAreaChart",
+    "stacked area chart": "stackedAreaChart",
+    
+    # Pies, Donuts & Circles
+    "donut chart": "donutChart",
+    "bubble chart": "scatterChart",
+    "treemap": "treemap",
+    "heatmap (highlight table)": "pivotTable",
+    
+    # Distributions & Maps
+    "box-and-whisker plot": "scatterChart",
+    "filled map": "filledMap",
+    "symbol map": "map",
+
+    # -------------------------------------------------------------
+    # 2. Exact Base Types from MARK_MAP & Fallback Cards
+    # -------------------------------------------------------------
+    "bar chart": "clusteredBarChart",
+    "line chart": "lineChart",
+    "area chart": "areaChart",
+    "text table": "tableEx",
+    "scatter plot": "scatterChart",
+    "heat map": "pivotTable",
+    "pie chart": "pieChart",
+    "map": "map",
+    "gantt chart": "clusteredBarChart",
+    "shape chart": "scatterChart",
+    "card": "card",
+    "standard visual": "clusteredColumnChart",
+
+    # -------------------------------------------------------------
+    # 3. Raw Tableau Metadata Tokens & Compact String Normalizations
     # -------------------------------------------------------------
     "hundredpercentbarchat": "hundredPercentStackedBarChart",
     "hundredpercentbarchart": "hundredPercentStackedBarChart",
-    "100barchat": "hundredPercentStackedBarChart",
-    "100barchart": "hundredPercentStackedBarChart",
     "hundredpercentstackedbarchat": "hundredPercentStackedBarChart",
     "hundredpercentstackedbarchart": "hundredPercentStackedBarChart",
+    "100percentstackedbarchart": "hundredPercentStackedBarChart",
+    "100stackedbarchart": "hundredPercentStackedBarChart",
+    
     "hundredpercentcolumnchat": "hundredPercentStackedColumnChart",
     "hundredpercentcolumnchart": "hundredPercentStackedColumnChart",
-    "100columnchat": "hundredPercentStackedColumnChart",
-    "100columnchart": "hundredPercentStackedColumnChart",
     "hundredpercentstackedcolumnchat": "hundredPercentStackedColumnChart",
     "hundredpercentstackedcolumnchart": "hundredPercentStackedColumnChart",
+    "100percentstackedcolumnchart": "hundredPercentStackedColumnChart",
+    "100stackedcolumnchart": "hundredPercentStackedColumnChart",
+
     "stackedbarchat": "barChart",
     "stackedbarchart": "barChart",
     "stackedcolumnchat": "columnChart",
     "stackedcolumnchart": "columnChart",
+    "stackedareachart": "stackedAreaChart",
 
-    # Tableau Raw Mark Types
+    # Raw Marks
     "text": "tableEx",
     "square": "treemap",
     "circle": "scatterChart",
@@ -682,117 +738,41 @@ VISUAL_TYPE_MAPPINGS = {
     "ganttbar": "clusteredBarChart",
     "polygon": "filledMap",
     "multipolygon": "filledMap",
+    "filledmap": "filledMap",
     "density": "filledMap",
+    "automatic": "clusteredColumnChart",
 
-    # Bars & Columns
-    "bar chart": "clusteredBarChart",
-    "bar": "clusteredBarChart",
-    "horizontal bar": "clusteredBarChart",
-    "stacked bar": "barChart",
-    "stacked bar chart": "barChart",
-    "100% stacked bar": "hundredPercentStackedBarChart",
-    "100% stacked bar chart": "hundredPercentStackedBarChart",
-    "diverging stacked bar": "hundredPercentStackedBarChart",
-    "likert scale chart": "hundredPercentStackedBarChart",
-    "column": "clusteredColumnChart",
-    "column chart": "clusteredColumnChart",
-    "standard column": "clusteredColumnChart",
-    "vertical column": "clusteredColumnChart",
-    "stacked column": "columnChart",
-    "stacked column chart": "columnChart",
-    "100% stacked column": "hundredPercentStackedColumnChart",
-    "100% stacked column chart": "hundredPercentStackedColumnChart",
-    "marimekko chart": "hundredPercentStackedColumnChart",
-    "mosaic chart": "hundredPercentStackedColumnChart",
-    "histogram": "clusteredColumnChart",
-    "gantt chart": "clusteredBarChart",
-
-    # Pies & Circles
-    "pie": "pieChart",
-    "pie chart": "pieChart",
-    "donut": "donutChart",
-    "donut chart": "donutChart",
-    "radial bar chart": "donutChart",
-    "semi-circle chart": "gauge",
-    "half donut chart": "gauge",
-
-    # Lines & Areas
-    "line": "lineChart",
-    "line chart": "lineChart",
-    "multi-line chart": "lineChart",
-    "dual axis line": "lineChart",
-    "sparkline standalone": "lineChart",
-    "area": "areaChart",
-    "area chart": "areaChart",
-    "stacked area": "stackedAreaChart",
-    "100% stacked area": "stackedAreaChart",
-
-    # Combos
-    "combo chart": "lineClusteredColumnComboChart",
-    "dual axis combo chart": "lineClusteredColumnComboChart",
-    "line and clustered column": "lineClusteredColumnComboChart",
-    "line and stacked column": "lineStackedColumnComboChart",
-    "pareto chart": "lineClusteredColumnComboChart",
-
-    # Trees, Hierarchies & Flows
-    "treemap": "treemap",
-    "sunburst chart": "treemap",
-    "waterfall": "waterfallChart",
-    "waterfall chart": "waterfallChart",
-    "funnel": "funnel",
-    "funnel chart": "funnel",
-    "ribbon chart": "ribbonChart",
-    "sankey diagram": "ribbonChart",
-
-    # Scatter
-    "scatter": "scatterChart",
-    "scatter plot": "scatterChart",
-    "bubble chart": "scatterChart",
-    "box and whisker plot": "scatterChart",
-
-    # Maps
-    "symbol map": "map",
-    "bubble map": "map",
-    "choropleth map": "filledMap",
-    "filled map": "filledMap",
-    "shape map": "shapeMap",
-
-    # Tables & Matrices
-    "text table": "tableEx",
-    "table": "tableEx",
-    "crosstab": "pivotTable",
-    "matrix": "pivotTable",
-    "pivot table": "pivotTable",
-
-    # Cards & Gauges
-    "card": "card",
-    "multi-row kpi card": "multiRowCard",
-    "kpi": "kpi",
-    "gauge": "gauge",
-    "bullet graph": "gauge",
-
-    # Advanced
-    "slicer": "slicer",
+    # Common Slicers & Controls
+    "filter": "slicer",
     "filter control": "slicer",
+    "slicer": "slicer",
     "decomposition tree": "decompositionTree",
     "key influencers": "keyDriversVisual",
     "q&a natural language box": "qnaVisual",
 }
 
+# Ordered prefix / keyword fallbacks for unhandled permutations
 _NORMALIZED_FALLBACKS = [
+    ("100stackedbar", "hundredPercentStackedBarChart"),
     ("hundredpercentbar", "hundredPercentStackedBarChart"),
     ("100percentbar", "hundredPercentStackedBarChart"),
     ("100bar", "hundredPercentStackedBarChart"),
+
+    ("100stackedcolumn", "hundredPercentStackedColumnChart"),
     ("hundredpercentcolumn", "hundredPercentStackedColumnChart"),
     ("100percentcolumn", "hundredPercentStackedColumnChart"),
     ("100column", "hundredPercentStackedColumnChart"),
+
+    ("100stackedarea", "stackedAreaChart"),
     ("hundredpercentarea", "stackedAreaChart"),
     ("100percentarea", "stackedAreaChart"),
+    
     ("stackedbar", "barChart"),
     ("stackedcolumn", "columnChart"),
     ("stackedarea", "stackedAreaChart"),
+    
     ("combo", "lineClusteredColumnComboChart"),
-    ("dualaxis", "lineClusteredColumnComboChart"),
+    ("dualaxis", "lineChart"),
     ("donut", "donutChart"),
     ("pie", "pieChart"),
     ("waterfall", "waterfallChart"),
@@ -801,32 +781,38 @@ _NORMALIZED_FALLBACKS = [
     ("bullet", "gauge"),
     ("ribbon", "ribbonChart"),
     ("sankey", "ribbonChart"),
-    ("decomposition", "decompositionTree"),
-    ("influencer", "keyDriversVisual"),
     ("treemap", "treemap"),
-    ("scatter", "scatterChart"),
     ("bubble", "scatterChart"),
-    ("bar", "clusteredBarChart"),
+    ("boxwhisker", "scatterChart"),
+    ("boxplot", "scatterChart"),
+    ("scatter", "scatterChart"),
+    ("horizontalbar", "clusteredBarChart"),
+    ("verticalbar", "clusteredColumnChart"),
     ("column", "clusteredColumnChart"),
+    ("bar", "clusteredBarChart"),
     ("area", "areaChart"),
     ("line", "lineChart"),
-    ("multirow", "multiRowCard"),
     ("card", "card"),
     ("kpi", "kpi"),
+    ("heatmap", "pivotTable"),
+    ("highlighttable", "pivotTable"),
+    ("crosstab", "pivotTable"),
     ("matrix", "pivotTable"),
     ("pivot", "pivotTable"),
-    ("crosstab", "pivotTable"),
-    ("slicer", "slicer"),
-    ("filter", "slicer"),
+    ("table", "tableEx"),
     ("shapemap", "shapeMap"),
     ("filledmap", "filledMap"),
+    ("symbolmap", "map"),
     ("map", "map"),
-    ("table", "tableEx"),
+    ("slicer", "slicer"),
+    ("filter", "slicer"),
 ]
 
 
 def map_visual_type(raw_type: Optional[str]) -> str:
-    """Normalizes raw Tableau metadata visual types to Power BI visualType."""
+    """
+    Normalizes any visual string to a valid Power BI visualType identifier.
+    """
     if not raw_type:
         return "tableEx"
 
@@ -834,24 +820,38 @@ def map_visual_type(raw_type: Optional[str]) -> str:
     if not cleaned:
         return "tableEx"
 
-    # 1. Direct dictionary match (with original spaces/punctuation)
+    # 1. Exact match
     if cleaned in VISUAL_TYPE_MAPPINGS:
         return VISUAL_TYPE_MAPPINGS[cleaned]
 
-    # 2. Normalized alphanumeric representation (removes spaces, hyphens, %)
-    # E.g., "100% stacked bar chart" -> "100stackedbarchart"
+    # 2. Normalized compact alphanumeric string match (handles typos/dropped spaces)
     compact = re.sub(r"[^a-z0-9]", "", cleaned)
+    compact_fixed = (
+        compact.replace("barchat", "barchart")
+        .replace("columnchat", "columnchart")
+        .replace("andwhisker", "")
+    )
+    
     if compact in VISUAL_TYPE_MAPPINGS:
         return VISUAL_TYPE_MAPPINGS[compact]
-
-    # Handle common typo "chat" -> "chart"
-    compact_fixed = compact.replace("barchat", "barchart").replace("columnchat", "columnchart")
     if compact_fixed in VISUAL_TYPE_MAPPINGS:
         return VISUAL_TYPE_MAPPINGS[compact_fixed]
 
-    # 3. Normalized fallback keyword scan
+    # 3. Fallback ordered scanner
     for keyword, mapped in _NORMALIZED_FALLBACKS:
         if keyword in compact or keyword in compact_fixed:
             return mapped
 
     return "tableEx"
+
+
+def map_worksheet_visual(worksheet_meta: Dict[str, Any]) -> str:
+    """
+    Helper to resolve a worksheet dict from extract_visual_metadata()
+    by checking visualSubtype first, then visualType.
+    """
+    subtype = worksheet_meta.get("visualSubtype")
+    if subtype:
+        return map_visual_type(subtype)
+
+    return map_visual_type(worksheet_meta.get("visualType"))
