@@ -554,6 +554,119 @@ class VisualGenerator:
                     meas.append(f)
         return dims, meas
  
+    @staticmethod
+    def _classify_role(field: Dict[str, Any]) -> str:
+        """Reads an explicit role/shelf tag off a field, when the source
+        metadata provides one (legend/color, tooltip, detail, size, etc.).
+        Different report exports use different key names for this, so all
+        the common ones are checked dynamically."""
+        raw = (
+            field.get("visualRole")
+            or field.get("fieldRole")
+            or field.get("shelf")
+            or field.get("encoding")
+            or field.get("markRole")
+            or ""
+        )
+        return str(raw).strip().lower()
+ 
+    @staticmethod
+    def _is_calc_field(field: Dict[str, Any], calc_lookup: Dict[str, Any], name: str) -> bool:
+        return bool(
+            field.get("fieldType") == "calculatedField"
+            or field.get("formula")
+            or field.get("calculationId")
+            or name in calc_lookup
+        )
+ 
+    def _field_binding(self, f: Dict[str, Any]) -> Dict[str, Any]:
+        name = f.get("column") or f.get("name") or "Field"
+        table = f.get("table") or self._infer_table_for_column(name)
+        return {"table": table, "column": name}
+ 
+    def _measure_binding(self, m: Dict[str, Any]) -> Dict[str, Any]:
+        m_name = m.get("name") or m.get("column") or "Value"
+        m_table = m.get("table") or self._infer_table_for_column(m_name)
+        if self._is_calc_field(m, self.calc_lookup, m_name):
+            return {"table": m_table, "measure": m_name}
+        return {
+            "table": m_table,
+            "column": m.get("column") or m_name,
+            "aggregation": m.get("derivation") or "Sum",
+        }
+ 
+    def _build_bindings(self, dims: List[Dict[str, Any]], meas: List[Dict[str, Any]], v_type: str) -> Dict[str, Any]:
+        """Dynamically builds bindings so that no field/role is ever dropped.
+ 
+        Every dimension and measure is placed into its binding role - if the
+        source metadata explicitly tags a field's role (legend/color,
+        tooltip, detail, size), that's honored directly. Fields without an
+        explicit tag fall back to a positional rule: the first dimension is
+        the primary axis (Category/X, or Rows for matrix visuals), and any
+        *additional* dimensions become Legend/Columns instead of being
+        silently discarded - which is what previously happened whenever a
+        visual carried more than one dimension role.
+        """
+        bindings: Dict[str, Any] = {}
+ 
+        role_buckets = {"legend": [], "color": [], "tooltip": [], "detail": [], "details": [], "size": []}
+        leftover_dims = []
+        for d in dims:
+            role = self._classify_role(d)
+            if role in role_buckets:
+                role_buckets[role].append(d)
+            else:
+                leftover_dims.append(d)
+ 
+        if v_type == "pivotTable" and len(leftover_dims) >= 2:
+            # Matrix-style visual: split remaining dims into Rows + Columns
+            # instead of collapsing everything into a single Category field.
+            bindings["Rows"] = [self._field_binding(d) for d in leftover_dims[:-1]]
+            bindings["Columns"] = [self._field_binding(leftover_dims[-1])]
+        elif leftover_dims:
+            primary_key = "X" if v_type == "lineChart" else "Category"
+            bindings[primary_key] = self._field_binding(leftover_dims[0])
+            # Any dimension beyond the first is a second role (commonly the
+            # Legend/series breakdown) - never dropped.
+            extra_dims = leftover_dims[1:]
+            legend_fields = role_buckets["legend"] + role_buckets["color"] + extra_dims
+            if legend_fields:
+                bindings["Legend"] = [self._field_binding(f) for f in legend_fields]
+        else:
+            legend_fields = role_buckets["legend"] + role_buckets["color"]
+            if legend_fields:
+                bindings["Legend"] = [self._field_binding(f) for f in legend_fields]
+ 
+        detail_fields = role_buckets["detail"] + role_buckets["details"]
+        if detail_fields:
+            bindings["Details"] = [self._field_binding(f) for f in detail_fields]
+        if role_buckets["tooltip"]:
+            bindings.setdefault("Tooltip", []).extend(self._field_binding(f) for f in role_buckets["tooltip"])
+        if role_buckets["size"]:
+            bindings.setdefault("Size", []).extend(self._field_binding(f) for f in role_buckets["size"])
+ 
+        # Measures: same principle - route explicitly-tagged size/tooltip
+        # measures to their own role, everything else becomes Y (values).
+        y_list, size_list, tooltip_list = [], [], []
+        for m in meas:
+            role = self._classify_role(m)
+            entry = self._measure_binding(m)
+            if role == "size":
+                size_list.append(entry)
+            elif role == "tooltip":
+                tooltip_list.append(entry)
+            else:
+                y_list.append(entry)
+ 
+        if y_list:
+            bindings["Y"] = y_list
+        if size_list:
+            bindings.setdefault("Size", []).extend(size_list)
+        if tooltip_list:
+            bindings.setdefault("Tooltip", []).extend(tooltip_list)
+ 
+        return bindings
+ 
     def build_visual(
         self,
         sheet_name: str,
@@ -603,66 +716,25 @@ class VisualGenerator:
             dims, meas = self._extract_fields(ws)
  
         # 1. Bindings - use whatever the source already provides if present,
-        # otherwise build dynamically from dims/measures.
+        # otherwise build dynamically from ALL dims/measures (every role
+        # gets placed, none are dropped even when a visual has 2+ roles).
         bindings: Dict[str, Any] = dict(prebuilt_bindings) if prebuilt_bindings else {}
  
-        if not bindings and dims:
-            d = dims[0]
-            d_name = d.get("column") or d.get("name") or "Category"
-            d_table = d.get("table") or self._infer_table_for_column(d_name)
+        if not bindings:
+            bindings = self._build_bindings(dims, meas, v_type)
  
-            if v_type == "lineChart":
-                bindings["X"] = {"table": d_table, "column": d_name}
-            else:
-                bindings["Category"] = {"table": d_table, "column": d_name}
- 
-        # Y (Measures) Binding - only rebuild if we don't already have
-        # pre-built bindings from the source data.
-        if "Y" not in bindings:
-            y_list = []
-            for m in meas:
-                m_name = m.get("name") or m.get("column") or "Value"
-                m_table = m.get("table") or self._infer_table_for_column(m_name)
- 
-                is_calc = (
-                    m.get("fieldType") == "calculatedField"
-                    or bool(m.get("formula"))
-                    or bool(m.get("calculationId"))
-                    or m_name in self.calc_lookup
-                )
- 
-                if is_calc:
-                    y_list.append({
-                        "table": m_table,
-                        "measure": m_name
-                    })
-                else:
-                    y_list.append({
-                        "table": m_table,
-                        "column": m.get("column") or m_name,
-                        "aggregation": m.get("derivation") or "Sum"
-                    })
- 
-            if y_list:
-                bindings["Y"] = y_list
- 
-        # 2. SortBy
+        # 2. SortBy - dynamic fallback across every role that could anchor a sort.
         sort_by: Dict[str, Any] = {}
-        if "Y" in bindings and bindings["Y"]:
+        for role in ("Y", "X", "Category", "Rows", "Columns", "Legend"):
+            target = bindings.get(role)
+            if not target:
+                continue
+            target_field = target[0] if isinstance(target, list) else target
             sort_by = {
-                "target": bindings["Y"][0],
-                "direction": "Descending"
+                "target": target_field,
+                "direction": "Descending" if role in ("Y",) else "Ascending",
             }
-        elif "Category" in bindings:
-            sort_by = {
-                "target": bindings["Category"],
-                "direction": "Ascending"
-            }
-        elif "X" in bindings:
-            sort_by = {
-                "target": bindings["X"],
-                "direction": "Ascending"
-            }
+            break
  
         # 3. Filters - merge whichever source actually has them (dashboard
         # visual entry takes priority, worksheet is the dynamic fallback).
