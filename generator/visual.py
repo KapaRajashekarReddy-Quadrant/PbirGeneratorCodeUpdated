@@ -1127,7 +1127,7 @@ class VisualGenerator:
             },
             "bindings": bindings,
             "sortBy": sort_by,
-            "filters": filters,
+            "filters": [],
             "properties": [
                 {
                     "objectName": "values",
