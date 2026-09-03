@@ -779,23 +779,75 @@ from generator.utils import map_visual_type
  
  
 class VisualGenerator:
+    # def __init__(self, metadata: Dict[str, Any]):
+    #     self.metadata = metadata or {}
+    #     self.worksheets = self.metadata.get("worksheets", {})
+    #     self.tables_meta = self.metadata.get("tables", {})
+    #     self.measures_meta = self.metadata.get("measures", [])
+ 
+    #     # Quick lookup for calculation definitions
+    #     self.calc_lookup = {}
+    #     if isinstance(self.measures_meta, list):
+    #         for c in self.measures_meta:
+    #             if isinstance(c, dict):
+    #                 calc_id = c.get("calculationId")
+    #                 calc_name = c.get("name")
+    #                 if calc_id:
+    #                     self.calc_lookup[calc_id] = c
+    #                 if calc_name:
+    #                     self.calc_lookup[calc_name] = c
     def __init__(self, metadata: Dict[str, Any]):
         self.metadata = metadata or {}
         self.worksheets = self.metadata.get("worksheets", {})
         self.tables_meta = self.metadata.get("tables", {})
-        self.measures_meta = self.metadata.get("measures", [])
- 
-        # Quick lookup for calculation definitions
+        # extract-metadata uses "calculations"; some payloads may use "measures"
+        self.measures_meta = (
+            self.metadata.get("calculations")
+            or self.metadata.get("measures")
+            or []
+        )
+
         self.calc_lookup = {}
+        self.calc_id_to_caption = {}  # Calculation_xxx -> "Top 5 Machines"
+
         if isinstance(self.measures_meta, list):
             for c in self.measures_meta:
-                if isinstance(c, dict):
-                    calc_id = c.get("calculationId")
-                    calc_name = c.get("name")
-                    if calc_id:
-                        self.calc_lookup[calc_id] = c
+                if not isinstance(c, dict):
+                    continue
+                calc_id = (c.get("calculationId") or "").strip()
+                calc_name = (c.get("name") or "").strip()
+                if calc_id:
+                    self.calc_lookup[calc_id] = c
+                    self.calc_lookup[calc_id.replace("[", "").replace("]", "")] = c
                     if calc_name:
-                        self.calc_lookup[calc_name] = c
+                        self.calc_id_to_caption[calc_id] = calc_name
+                        self.calc_id_to_caption[calc_id.replace("[", "").replace("]", "")] = calc_name
+                if calc_name:
+                    self.calc_lookup[calc_name] = c
+
+    def _resolve_field_name(self, f: Dict[str, Any]) -> str:
+        """Prefer caption; map Tableau Calculation_* ids to caption."""
+        name = (f.get("name") or "").strip()
+        column = (f.get("column") or "").strip()
+        calc_id = (f.get("calculationId") or "").strip()
+
+        for candidate in (name, column, calc_id):
+            if not candidate:
+                continue
+            clean = candidate.replace("[", "").replace("]", "")
+            if clean in self.calc_id_to_caption:
+                return self.calc_id_to_caption[clean]
+            if candidate in self.calc_id_to_caption:
+                return self.calc_id_to_caption[candidate]
+
+        # Prefer non-Calculation name
+        if name and not name.startswith("Calculation_"):
+            return name
+        if column and not column.startswith("Calculation_"):
+            return column
+        if name:
+            return name
+        return column or "Field"
  
     def _extract_title_text(self, title_obj: Any, default_name: str) -> str:
         """
@@ -943,19 +995,46 @@ class VisualGenerator:
             or name in calc_lookup
         )
  
-    def _field_binding(self, f: Dict[str, Any]) -> Dict[str, Any]:
-        name = f.get("column") or f.get("name") or "Field"
-        table = f.get("table") or self._infer_table_for_column(name)
-        return {"table": table, "column": name}
+    # def _field_binding(self, f: Dict[str, Any]) -> Dict[str, Any]:
+    #     name = f.get("column") or f.get("name") or "Field"
+    #     table = f.get("table") or self._infer_table_for_column(name)
+    #     return {"table": table, "column": name}
  
+    # def _measure_binding(self, m: Dict[str, Any]) -> Dict[str, Any]:
+    #     m_name = m.get("name") or m.get("column") or "Value"
+    #     m_table = m.get("table") or self._infer_table_for_column(m_name)
+    #     if self._is_calc_field(m, self.calc_lookup, m_name):
+    #         return {"table": m_table, "measure": m_name}
+    #     return {
+    #         "table": m_table,
+    #         "column": m.get("column") or m_name,
+    #         "aggregation": m.get("derivation") or "Sum",
+    #     }
+
+    DEFAULT_MEASURES_TABLE = "Measures1"
+
+    def _field_binding(self, f: Dict[str, Any]) -> Dict[str, Any]:
+        resolved = self._resolve_field_name(f)
+        # Calculated field → measure on Measures1 (not a physical column)
+        if self._is_calc_field(f, self.calc_lookup, resolved) or self._is_calc_field(
+            f, self.calc_lookup, f.get("column") or ""
+        ):
+            return {"table": self.DEFAULT_MEASURES_TABLE, "measure": resolved}
+        table = f.get("table") or self._infer_table_for_column(resolved)
+        if not table or table in ("Unknown", "None", None):
+            table = self._infer_table_for_column(resolved)
+        return {"table": table, "column": resolved}
+
     def _measure_binding(self, m: Dict[str, Any]) -> Dict[str, Any]:
-        m_name = m.get("name") or m.get("column") or "Value"
-        m_table = m.get("table") or self._infer_table_for_column(m_name)
-        if self._is_calc_field(m, self.calc_lookup, m_name):
-            return {"table": m_table, "measure": m_name}
+        resolved = self._resolve_field_name(m)
+        if self._is_calc_field(m, self.calc_lookup, resolved) or self._is_calc_field(
+            m, self.calc_lookup, m.get("column") or ""
+        ):
+            return {"table": self.DEFAULT_MEASURES_TABLE, "measure": resolved}
+        m_table = m.get("table") or self._infer_table_for_column(resolved)
         return {
             "table": m_table,
-            "column": m.get("column") or m_name,
+            "column": m.get("column") or resolved,
             "aggregation": m.get("derivation") or "Sum",
         }
  
@@ -1104,15 +1183,27 @@ class VisualGenerator:
         # visual entry takes priority, worksheet is the dynamic fallback).
         filters = []
         raw_filters = visual_meta.get("filters") or ws.get("filters", [])
+        # for flt in raw_filters:
+        #     if isinstance(flt, dict):
+        #         col = flt.get("column") or flt.get("name") or "FilterColumn"
+        #         tbl = flt.get("table") or self._infer_table_for_column(col)
+        #         filters.append({
+        #             "table": tbl,
+        #             "column": col,
+        #             "operator": flt.get("operator", "In"),
+        #             "values": flt.get("values", [])
+        #         })
         for flt in raw_filters:
             if isinstance(flt, dict):
-                col = flt.get("column") or flt.get("name") or "FilterColumn"
+                col = self._resolve_field_name(flt)
+                if col.startswith("Calculation_"):
+                    continue  # or map via calc_id_to_caption only
                 tbl = flt.get("table") or self._infer_table_for_column(col)
                 filters.append({
                     "table": tbl,
                     "column": col,
                     "operator": flt.get("operator", "In"),
-                    "values": flt.get("values", [])
+                    "values": flt.get("values", []),
                 })
  
         return {
