@@ -775,33 +775,52 @@
 # generator/visual.py
 import re
 from typing import Any, Dict, List, Optional
+
 from generator.utils import map_visual_type
- 
- 
+
+
 class VisualGenerator:
+    DEFAULT_MEASURES_TABLE = "Measures1"
+
     def __init__(self, metadata: Dict[str, Any]):
         self.metadata = metadata or {}
         self.worksheets = self.metadata.get("worksheets", {})
         self.tables_meta = self.metadata.get("tables", {})
-        self.measures_meta = self.metadata.get("measures", [])
- 
-        # Quick lookup for calculation definitions
-        self.calc_lookup = {}
+
+        # extract-metadata uses "calculations"; some payloads may use "measures"
+        self.measures_meta = (
+            self.metadata.get("calculations")
+            or self.metadata.get("measures")
+            or []
+        )
+
+        self.calc_lookup: Dict[str, Any] = {}
+        self.calc_id_to_caption: Dict[str, str] = {}
+
         if isinstance(self.measures_meta, list):
             for c in self.measures_meta:
-                if isinstance(c, dict):
-                    calc_id = c.get("calculationId")
-                    calc_name = c.get("name")
-                    if calc_id:
-                        self.calc_lookup[calc_id] = c
-                    if calc_name:
-                        self.calc_lookup[calc_name] = c
- 
+                if not isinstance(c, dict):
+                    continue
+                calc_id = str(c.get("calculationId") or "").strip()
+                calc_name = str(c.get("name") or "").strip()
+
+                def _register(key: str, caption: str, entry: dict):
+                    if not key:
+                        return
+                    clean = key.replace("[", "").replace("]", "").strip()
+                    self.calc_lookup[key] = entry
+                    self.calc_lookup[clean] = entry
+                    if caption:
+                        self.calc_id_to_caption[key] = caption
+                        self.calc_id_to_caption[clean] = caption
+
+                if calc_id:
+                    _register(calc_id, calc_name, c)
+                if calc_name:
+                    self.calc_lookup[calc_name] = c
+
     def _extract_title_text(self, title_obj: Any, default_name: str) -> str:
-        """
-        Dynamically extracts a pure string title from title dict, string, or fallback.
-        Ensures title is never returned as a JSON object.
-        """
+        """Dynamically extracts a pure string title from title dict, string, or fallback."""
         if isinstance(title_obj, dict):
             title = (
                 title_obj.get("displayText")
@@ -813,19 +832,19 @@ class VisualGenerator:
             title = title_obj
         else:
             title = default_name
- 
+
         title_str = str(title).strip()
         if title_str.lower() in ["<sheet name>", "sheet name", ""]:
             return str(default_name).strip()
         return title_str
- 
+
     def _infer_table_for_column(self, col_name: str) -> str:
         """Dynamically finds which table contains the column."""
         if not col_name:
             if isinstance(self.tables_meta, dict) and self.tables_meta:
                 return next(iter(self.tables_meta.keys()))
             return "Table"
- 
+
         clean = re.sub(r"[\[\]]", "", str(col_name)).strip()
         if isinstance(self.tables_meta, dict):
             for tbl, cols in self.tables_meta.items():
@@ -833,35 +852,27 @@ class VisualGenerator:
                     for c in cols:
                         if isinstance(c, dict) and c.get("name") == clean:
                             return tbl
- 
+
         if isinstance(self.tables_meta, dict) and self.tables_meta:
             return next(iter(self.tables_meta.keys()))
         return "Table"
- 
+
     @staticmethod
     def _normalize_name(name: Any) -> str:
-        """Normalizes a sheet/visual name for fuzzy matching: lowercase,
-        strip whitespace, and drop trailing Tableau duplicate suffixes like
-        ' (2)' or '_1' that dashboards commonly add to repeated zones."""
+        """Normalize sheet/visual name for fuzzy matching."""
         if not name:
             return ""
         s = str(name).strip().lower()
-        s = re.sub(r"\s*\(\d+\)\s*$", "", s)   # trailing " (2)"
-        s = re.sub(r"[_\-\s]+\d+$", "", s)      # trailing "_1", "-2", " 3"
-        s = re.sub(r"[^a-z0-9]+", "", s)        # strip remaining punctuation/spaces
+        s = re.sub(r"\s*\(\d+\)\s*$", "", s)
+        s = re.sub(r"[_\-\s]+\d+$", "", s)
+        s = re.sub(r"[^a-z0-9]+", "", s)
         return s
- 
+
     def _find_worksheet(self, sheet_name: str) -> Dict[str, Any]:
-        """Dynamically resolves a worksheet for any report, tolerant of
-        naming mismatches between a dashboard's visual/zone name and the
-        worksheet key it actually refers to (case, spacing, numeric
-        dedupe suffixes, etc.). Falls back gracefully to {} only if truly
-        nothing can be matched."""
+        """Resolve worksheet by exact / case / normalized / substring match."""
         if not sheet_name:
             return {}
- 
-        # Build (or reuse) a list of (name, worksheet_dict) pairs regardless
-        # of whether worksheets is a dict keyed by name or a list of dicts.
+
         items = []
         if isinstance(self.worksheets, dict):
             items = list(self.worksheets.items())
@@ -869,42 +880,37 @@ class VisualGenerator:
             for item in self.worksheets:
                 if isinstance(item, dict):
                     items.append((item.get("name") or item.get("id") or "", item))
- 
+
         if not items:
             return {}
- 
-        # 1. Exact match
+
         for name, ws in items:
             if name == sheet_name:
                 return ws
- 
-        # 2. Case-insensitive / whitespace-tolerant match
+
         target_lower = str(sheet_name).strip().lower()
         for name, ws in items:
             if str(name).strip().lower() == target_lower:
                 return ws
- 
-        # 3. Fully normalized match (handles "Sheet 1 (2)" -> "sheet1")
+
         target_norm = self._normalize_name(sheet_name)
         if target_norm:
             for name, ws in items:
                 if self._normalize_name(name) == target_norm:
                     return ws
- 
-        # 4. Substring match as a last resort (one name contains the other)
+
         for name, ws in items:
             name_lower = str(name).strip().lower()
             if name_lower and (name_lower in target_lower or target_lower in name_lower):
                 return ws
- 
+
         return {}
- 
+
     def _extract_fields(self, ws: Dict[str, Any]):
-        """Dynamically extracts dimensions and measures."""
+        """Extract dimensions and measures from a worksheet / visual meta."""
         dims = list(ws.get("dimensions", []))
         meas = list(ws.get("measures", []))
- 
-        # Fallback to fields array if dimensions/measures are not pre-partitioned
+
         if not dims and not meas:
             fields = ws.get("fields", []) or ws.get("columns", [])
             for f in fields:
@@ -912,18 +918,17 @@ class VisualGenerator:
                     continue
                 role = str(f.get("role", "")).lower()
                 dtype = str(f.get("dataType", "")).lower()
+                field_type = str(f.get("fieldType", "")).lower()
                 if role == "dimension" or "name" in dtype:
                     dims.append(f)
+                elif field_type == "calculatedfield" or role == "measure":
+                    meas.append(f)
                 else:
                     meas.append(f)
         return dims, meas
- 
+
     @staticmethod
     def _classify_role(field: Dict[str, Any]) -> str:
-        """Reads an explicit role/shelf tag off a field, when the source
-        metadata provides one (legend/color, tooltip, detail, size, etc.).
-        Different report exports use different key names for this, so all
-        the common ones are checked dynamically."""
         raw = (
             field.get("visualRole")
             or field.get("fieldRole")
@@ -933,47 +938,132 @@ class VisualGenerator:
             or ""
         )
         return str(raw).strip().lower()
- 
+
     @staticmethod
     def _is_calc_field(field: Dict[str, Any], calc_lookup: Dict[str, Any], name: str) -> bool:
+        if not field and not name:
+            return False
+        field = field or {}
+        name = str(name or "")
+        clean_name = name.replace("[", "").replace("]", "").strip()
         return bool(
             field.get("fieldType") == "calculatedField"
             or field.get("formula")
             or field.get("calculationId")
-            or name in calc_lookup
+            or (name and name in calc_lookup)
+            or (clean_name and clean_name in calc_lookup)
+            or clean_name.startswith("Calculation_")
+            or "Calculation_" in name
         )
- 
+
+    def _resolve_field_name(self, f: Dict[str, Any]) -> str:
+        """Map Tableau Calculation_* / internal ids to caption used on Measures1."""
+        if not isinstance(f, dict):
+            return str(f or "Field")
+
+        name = str(f.get("name") or "").strip()
+        column = str(f.get("column") or "").strip()
+        calc_id = str(f.get("calculationId") or "").strip()
+
+        def _from_id(candidate: str) -> Optional[str]:
+            if not candidate:
+                return None
+            clean = candidate.replace("[", "").replace("]", "").strip()
+            # Direct map
+            if clean in self.calc_id_to_caption:
+                return self.calc_id_to_caption[clean]
+            if candidate in self.calc_id_to_caption:
+                return self.calc_id_to_caption[candidate]
+            # Embedded Calculation_XXXX in federated strings
+            m = re.search(r"(Calculation_\d+)", clean, flags=re.IGNORECASE)
+            if m:
+                cid = m.group(1)
+                if cid in self.calc_id_to_caption:
+                    return self.calc_id_to_caption[cid]
+                entry = self.calc_lookup.get(cid)
+                if isinstance(entry, dict) and entry.get("name"):
+                    return str(entry["name"]).strip()
+            entry = self.calc_lookup.get(clean) or self.calc_lookup.get(candidate)
+            if isinstance(entry, dict) and entry.get("name"):
+                return str(entry["name"]).strip()
+            return None
+
+        for candidate in (calc_id, column, name):
+            resolved = _from_id(candidate)
+            if resolved:
+                return resolved
+
+        if name and not name.startswith("Calculation_") and "Calculation_" not in name:
+            return name
+        if column and not column.startswith("Calculation_") and "Calculation_" not in column:
+            return column
+        return name or column or "Field"
+
     def _field_binding(self, f: Dict[str, Any]) -> Dict[str, Any]:
-        name = f.get("column") or f.get("name") or "Field"
-        table = f.get("table") or self._infer_table_for_column(name)
-        return {"table": table, "column": name}
- 
+        resolved = self._resolve_field_name(f)
+        is_calc = self._is_calc_field(f, self.calc_lookup, resolved) or self._is_calc_field(
+            f, self.calc_lookup, str(f.get("column") or "")
+        )
+
+        if is_calc or resolved.startswith("Calculation_") or "Calculation_" in resolved:
+            if resolved.startswith("Calculation_") or "Calculation_" in resolved:
+                entry = self.calc_lookup.get(resolved) or self.calc_lookup.get(
+                    resolved.replace("[", "").replace("]", "")
+                )
+                m = re.search(r"(Calculation_\d+)", resolved, flags=re.IGNORECASE)
+                if m:
+                    entry = entry or self.calc_lookup.get(m.group(1))
+                if isinstance(entry, dict) and entry.get("name"):
+                    resolved = str(entry["name"]).strip()
+            return {"table": self.DEFAULT_MEASURES_TABLE, "measure": resolved}
+
+        table = f.get("table") or self._infer_table_for_column(resolved)
+        if not table or str(table).lower() in ("unknown", "none", ""):
+            table = self._infer_table_for_column(resolved)
+        return {"table": table, "column": resolved}
+
     def _measure_binding(self, m: Dict[str, Any]) -> Dict[str, Any]:
-        m_name = m.get("name") or m.get("column") or "Value"
-        m_table = m.get("table") or self._infer_table_for_column(m_name)
-        if self._is_calc_field(m, self.calc_lookup, m_name):
-            return {"table": m_table, "measure": m_name}
+        resolved = self._resolve_field_name(m)
+        is_calc = self._is_calc_field(m, self.calc_lookup, resolved) or self._is_calc_field(
+            m, self.calc_lookup, str(m.get("column") or "")
+        )
+
+        if is_calc or resolved.startswith("Calculation_") or "Calculation_" in resolved:
+            if resolved.startswith("Calculation_") or "Calculation_" in resolved:
+                entry = self.calc_lookup.get(resolved) or self.calc_lookup.get(
+                    resolved.replace("[", "").replace("]", "")
+                )
+                m_id = re.search(r"(Calculation_\d+)", resolved, flags=re.IGNORECASE)
+                if m_id:
+                    entry = entry or self.calc_lookup.get(m_id.group(1))
+                if isinstance(entry, dict) and entry.get("name"):
+                    resolved = str(entry["name"]).strip()
+            return {"table": self.DEFAULT_MEASURES_TABLE, "measure": resolved}
+
+        m_table = m.get("table") or self._infer_table_for_column(resolved)
         return {
             "table": m_table,
-            "column": m.get("column") or m_name,
+            "column": m.get("column") or resolved,
             "aggregation": m.get("derivation") or "Sum",
         }
- 
-    def _build_bindings(self, dims: List[Dict[str, Any]], meas: List[Dict[str, Any]], v_type: str) -> Dict[str, Any]:
-        """Dynamically builds bindings so that no field/role is ever dropped.
- 
-        Every dimension and measure is placed into its binding role - if the
-        source metadata explicitly tags a field's role (legend/color,
-        tooltip, detail, size), that's honored directly. Fields without an
-        explicit tag fall back to a positional rule: the first dimension is
-        the primary axis (Category/X, or Rows for matrix visuals), and any
-        *additional* dimensions become Legend/Columns instead of being
-        silently discarded - which is what previously happened whenever a
-        visual carried more than one dimension role.
-        """
+
+    def _build_bindings(
+        self,
+        dims: List[Dict[str, Any]],
+        meas: List[Dict[str, Any]],
+        v_type: str,
+    ) -> Dict[str, Any]:
+        """Build bindings so no field/role is dropped."""
         bindings: Dict[str, Any] = {}
- 
-        role_buckets = {"legend": [], "color": [], "tooltip": [], "detail": [], "details": [], "size": []}
+
+        role_buckets = {
+            "legend": [],
+            "color": [],
+            "tooltip": [],
+            "detail": [],
+            "details": [],
+            "size": [],
+        }
         leftover_dims = []
         for d in dims:
             role = self._classify_role(d)
@@ -981,17 +1071,13 @@ class VisualGenerator:
                 role_buckets[role].append(d)
             else:
                 leftover_dims.append(d)
- 
+
         if v_type == "pivotTable" and len(leftover_dims) >= 2:
-            # Matrix-style visual: split remaining dims into Rows + Columns
-            # instead of collapsing everything into a single Category field.
             bindings["Rows"] = [self._field_binding(d) for d in leftover_dims[:-1]]
             bindings["Columns"] = [self._field_binding(leftover_dims[-1])]
         elif leftover_dims:
             primary_key = "X" if v_type == "lineChart" else "Category"
             bindings[primary_key] = self._field_binding(leftover_dims[0])
-            # Any dimension beyond the first is a second role (commonly the
-            # Legend/series breakdown) - never dropped.
             extra_dims = leftover_dims[1:]
             legend_fields = role_buckets["legend"] + role_buckets["color"] + extra_dims
             if legend_fields:
@@ -1000,17 +1086,19 @@ class VisualGenerator:
             legend_fields = role_buckets["legend"] + role_buckets["color"]
             if legend_fields:
                 bindings["Legend"] = [self._field_binding(f) for f in legend_fields]
- 
+
         detail_fields = role_buckets["detail"] + role_buckets["details"]
         if detail_fields:
             bindings["Details"] = [self._field_binding(f) for f in detail_fields]
         if role_buckets["tooltip"]:
-            bindings.setdefault("Tooltip", []).extend(self._field_binding(f) for f in role_buckets["tooltip"])
+            bindings.setdefault("Tooltip", []).extend(
+                self._field_binding(f) for f in role_buckets["tooltip"]
+            )
         if role_buckets["size"]:
-            bindings.setdefault("Size", []).extend(self._field_binding(f) for f in role_buckets["size"])
- 
-        # Measures: same principle - route explicitly-tagged size/tooltip
-        # measures to their own role, everything else becomes Y (values).
+            bindings.setdefault("Size", []).extend(
+                self._field_binding(f) for f in role_buckets["size"]
+            )
+
         y_list, size_list, tooltip_list = [], [], []
         for m in meas:
             role = self._classify_role(m)
@@ -1021,43 +1109,33 @@ class VisualGenerator:
                 tooltip_list.append(entry)
             else:
                 y_list.append(entry)
- 
+
         if y_list:
             bindings["Y"] = y_list
         if size_list:
             bindings.setdefault("Size", []).extend(size_list)
         if tooltip_list:
             bindings.setdefault("Tooltip", []).extend(tooltip_list)
- 
+
         return bindings
- 
+
     def build_visual(
         self,
         sheet_name: str,
         layout: Dict[str, Any],
         visual_meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Constructs a single runtime visual object with standard visual types.
- 
-        visual_meta is the raw visual/zone entry as it appears directly under
-        a dashboard's "visuals" list (when present). Reports vary in how much
-        detail lives on the dashboard entry vs. the worksheets map, so both
-        sources are merged dynamically: values already present on visual_meta
-        win, and anything missing is filled in from the resolved worksheet.
-        This is what keeps bindings populated for every report instead of
-        only the ones whose visual name happens to exactly match a worksheet key.
-        """
+        """Construct a single runtime visual object."""
         visual_meta = visual_meta if isinstance(visual_meta, dict) else {}
- 
+
         ws = self._find_worksheet(sheet_name)
- 
-        # If the dashboard visual itself already carries pre-built bindings
-        # (as some report exports do), honor them directly rather than
-        # rebuilding from dimensions/measures.
-        prebuilt_bindings = visual_meta.get("bindings") if isinstance(visual_meta.get("bindings"), dict) else None
- 
-        # Unified single-pass mapping: prefer whatever type info is on the
-        # dashboard visual entry, then fall back to the worksheet.
+
+        prebuilt_bindings = (
+            visual_meta.get("bindings")
+            if isinstance(visual_meta.get("bindings"), dict)
+            else None
+        )
+
         raw_visual_type = (
             visual_meta.get("visualType")
             or visual_meta.get("mark")
@@ -1068,26 +1146,22 @@ class VisualGenerator:
             or ""
         )
         v_type = map_visual_type(raw_visual_type)
- 
+
         title_str = self._extract_title_text(
             visual_meta.get("title") or ws.get("title"), sheet_name
         )
- 
-        # Merge dims/measures: dashboard-level fields (if any) take priority,
-        # then fall back to the resolved worksheet's fields.
+
         dims, meas = self._extract_fields(visual_meta)
         if not dims and not meas:
             dims, meas = self._extract_fields(ws)
- 
-        # 1. Bindings - use whatever the source already provides if present,
-        # otherwise build dynamically from ALL dims/measures (every role
-        # gets placed, none are dropped even when a visual has 2+ roles).
+
         bindings: Dict[str, Any] = dict(prebuilt_bindings) if prebuilt_bindings else {}
- 
         if not bindings:
             bindings = self._build_bindings(dims, meas, v_type)
- 
-        # 2. SortBy - dynamic fallback across every role that could anchor a sort.
+
+        # Rewrite any leftover Calculation_* inside prebuilt bindings
+        bindings = self._sanitize_bindings(bindings)
+
         sort_by: Dict[str, Any] = {}
         for role in ("Y", "X", "Category", "Rows", "Columns", "Legend"):
             target = bindings.get(role)
@@ -1099,22 +1173,30 @@ class VisualGenerator:
                 "direction": "Descending" if role in ("Y",) else "Ascending",
             }
             break
- 
-        # 3. Filters - merge whichever source actually has them (dashboard
-        # visual entry takes priority, worksheet is the dynamic fallback).
+
         filters = []
         raw_filters = visual_meta.get("filters") or ws.get("filters", [])
         for flt in raw_filters:
-            if isinstance(flt, dict):
-                col = flt.get("column") or flt.get("name") or "FilterColumn"
-                tbl = flt.get("table") or self._infer_table_for_column(col)
-                filters.append({
+            if not isinstance(flt, dict):
+                continue
+            col = self._resolve_field_name(flt)
+            if col.startswith("Calculation_") or "Calculation_" in col:
+                continue
+            if self._is_calc_field(flt, self.calc_lookup, col):
+                # Calc-based filters need measure semantics; skip simple column filter
+                continue
+            tbl = flt.get("table") or self._infer_table_for_column(col)
+            if not tbl or str(tbl).lower() in ("unknown", "none"):
+                tbl = self._infer_table_for_column(col)
+            filters.append(
+                {
                     "table": tbl,
                     "column": col,
                     "operator": flt.get("operator", "In"),
-                    "values": flt.get("values", [])
-                })
- 
+                    "values": flt.get("values", []),
+                }
+            )
+
         return {
             "visualType": v_type,
             "title": title_str,
@@ -1123,16 +1205,51 @@ class VisualGenerator:
                 "y": layout.get("y", 99),
                 "width": layout.get("width", 608),
                 "height": layout.get("height", 225),
-                "z": layout.get("z", 1)
+                "z": layout.get("z", 1),
             },
             "bindings": bindings,
             "sortBy": sort_by,
-            "filters": [],
+            "filters": filters,
             "properties": [
                 {
                     "objectName": "values",
                     "propertyName": "labelDisplayUnits",
-                    "value": 1000
+                    "value": 1000,
                 }
-            ]
+            ],
         }
+
+    def _sanitize_bindings(self, bindings: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensure no binding still uses Calculation_* as a physical column."""
+        out: Dict[str, Any] = {}
+        for role, data in (bindings or {}).items():
+            items = data if isinstance(data, list) else [data]
+            cleaned = []
+            for b in items:
+                if not isinstance(b, dict):
+                    continue
+                b = dict(b)
+                if b.get("measure"):
+                    m = self._resolve_field_name({"name": b["measure"], "column": b["measure"]})
+                    cleaned.append({"table": self.DEFAULT_MEASURES_TABLE, "measure": m})
+                    continue
+                col = str(b.get("column") or "")
+                if col.startswith("Calculation_") or "Calculation_" in col or self._is_calc_field(
+                    b, self.calc_lookup, col
+                ):
+                    resolved = self._resolve_field_name(
+                        {"name": b.get("name"), "column": col, "calculationId": b.get("calculationId")}
+                    )
+                    cleaned.append({"table": self.DEFAULT_MEASURES_TABLE, "measure": resolved})
+                else:
+                    table = b.get("table") or self._infer_table_for_column(col)
+                    if not table or str(table).lower() in ("unknown", "none"):
+                        table = self._infer_table_for_column(col)
+                    entry = {"table": table, "column": col}
+                    if b.get("aggregation"):
+                        entry["aggregation"] = b["aggregation"]
+                    cleaned.append(entry)
+            if not cleaned:
+                continue
+            out[role] = cleaned if isinstance(data, list) else cleaned[0]
+        return out
